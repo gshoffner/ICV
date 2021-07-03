@@ -325,7 +325,7 @@ class IndirectKFoldCrossValidation(BivariateICV):
     >>> pool = mp.Pool(None)
     >>> b_grid = np.linspace(0.002,0.15,100)
     >>> loo_scores = pool.map(ICV, b_grid)
-    >>> kfold_score = pool.map(KICV, b_grid)
+    >>> kfold_scores = pool.map(KICV, b_grid)
     
     Here we plot the scores to visually check that we are in
     the range of the smallest minima. If the minimum occurs
@@ -346,7 +346,7 @@ class IndirectKFoldCrossValidation(BivariateICV):
         #Shuffle the samples. Since we called data.copy()
         #in __init__ this doesn't change the original data
         self.rng.shuffle(self.data, axis = 0)
-        self.split_data = np.stack(np.array_split(self.data, K, axis = 0))
+        self.split_data = np.array_split(self.data, K, axis = 0)
 
     def __call__(self, b):
         
@@ -356,10 +356,10 @@ class IndirectKFoldCrossValidation(BivariateICV):
         #equation (2) in [Savchuk2010]
         KFold_CV_score = (1.0/(n*b)) * self._RL
 
-        for missing_idx in np.arange(self.split_data.shape[0]):
+        for missing_idx in np.arange(len(self.split_data)):
             KFoldarray = np.concatenate(
-                    (self.split_data[:missing_idx], 
-                        self.split_data[missing_idx+1:]),
+                    (*self.split_data[:missing_idx], 
+                        *self.split_data[missing_idx+1:]),
                     axis = 0
                 )
             KFoldarray = KFoldarray.reshape(-1,2)
