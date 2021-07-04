@@ -102,47 +102,67 @@ class BivariateICV:
         """Operator `R` from [Savchuk2010] applied to the L
         kernel and evaluated at `params`."""
         
-        alpha, sigma = params
+        α, σ = params
 
-        value = (1.0/np.pi)*(((1.0+alpha)**2.0)/4.0 \
-                - alpha*(1.0+alpha)*sigma/(1.0+sigma**2.0)\
-                + (alpha**2.0)/4.0)
+        value = (1.0/np.pi)*(((1.0+α)**2.0)/4.0 \
+                - α*(1.0+α)*σ/(1.0+σ**2.0)\
+                + (α**2.0)/4.0)
 
         return value
 
     def _L_Kernel(self, points):
         """Evaluates the 2-dimensional L-kernel."""
-        alpha, sigma = self.params
-        L = (1.0 + alpha) * MVN.pdf(points, mean = np.zeros(2))
-        L -= (alpha/sigma)*MVN.pdf(points/sigma, mean = np.zeros(2))
+        α, σ = self.params
+        L = (1.0 + α) * MVN.pdf(points, mean = np.zeros(2))
+        L -= (α/σ)*MVN.pdf(points/σ, mean = np.zeros(2))
         return L
     
-    def _LSCV(self, b, kde_pts, trial_points):
-        """Evaluates ICV score on the L-kernel bandwidth `b`."""
+    def _LSCV(self, b, kde_pts, trial_pts):
+        """Evaluates ICV score on the L-kernel bandwidth `b`.
+
+        This function implements the sumations shown in 
+        equation (2) in [Savchuk2010] for the L-kernel. Note
+        that the first term in the equation (1/nh)R(L) is 
+        left out so that iterative calls to _LSCV over
+        successive values of `j` (the left out data point)
+        do not repeated add this first term. This means 
+        _LSCV should be invoked as
+
+        SUM = (1/nh)R(L)
+        for OUT_PT in PTS:
+            SUM += _LSCV(b, IN_PTS, OUT_PT)
+
+        The awkward outer-product call to substract below is
+        for compatibility with multiple left-out data, ie in
+        K-fold cross validation.     
+        """
 
         n = float(self.data.shape[0])
 
-        alpha, sigma = self.params
+        α, σ = self.params
         
-        diff_x = np.subtract.outer(
-                kde_pts[:,0], trial_points[:,0]
-            ).reshape(-1,1)
-        
-        diff_y = np.subtract.outer(
-                kde_pts[:,1], trial_points[:,1]
-            ).reshape(-1,1)
+        #Take the difference between the kernel means `kde_pts`
+        #the left-out points `trial_pts`
+        diff = np.concatenate(
+            [np.subtract.outer(kde_pts[:,i], trial_pts[:,i]).reshape(-1,1)\
+                for i in range(kde_pts.shape[1])],
+            axis = 1
+        )
 
-        diff = np.concatenate((diff_x, diff_y), axis = 1)
+        #Rescale by the bandwidth `b`
         diff /= b
 
         I = np.eye(2)
+        mu = np.zeros(2)
 
+        #Second term in Equation (2)
         SUM = (1.0/(b * n**2.0)) * np.sum(
-            ((1.0+alpha)**2.0)*MVN.pdf(diff, mean = np.zeros(2), cov = 2.0*I) \
-            - 2.0*sigma*alpha*(1.0+alpha)*MVN.pdf(diff, mean = np.zeros(2), cov = (1.0+sigma**2.0)*I) \
-            + (sigma**2.0)*(alpha**2.0)*MVN.pdf(diff, mean = np.zeros(2), cov = 2.0*(sigma**2.0)*I)
+            ((1.0+α)**2.0)*MVN.pdf(diff, mean=mu, cov = 2.0*I) \
+            - 2.0*σ*α*(1.0+α)*MVN.pdf(diff, mean=mu, cov = (1.0+σ**2.0)*I) \
+            + (σ**2.0)*(α**2.0)*MVN.pdf(diff, mean=mu, cov = 2.0*(σ**2.0)*I)
         )
 
+        #Third term in Equation (2)
         SUM -= (2.0/(n*(n-1.0)*b)) * np.sum(self._L_Kernel(diff))
 
         return SUM
@@ -152,9 +172,9 @@ class BivariateICV:
         converting the L-kernel bandwidth bUCV to the
         Gaussian kernel bandwidth hUCV."""
 
-        alpha, sigma = self.params
+        α, σ = self.params
         
-        return (((4.0*(1.0 + alpha) - 2.0*alpha*(sigma**3.0))**2.0)/(64.0*np.pi*self._RL))**0.2
+        return (((4.0*(1.0 + α) - 2.0*α*(σ**3.0))**2.0)/(64.0*np.pi*self._RL))**0.2
 
     def evaluate(self, b):
         """Evaluates Full ICV score on the L-kernel bandwidth `b`."""
@@ -210,18 +230,46 @@ class IndirectCrossValidation(BivariateICV):
     >>> b_hat_UCV = b_grid[np.argmin(scores)]
     >>> print(f"Optimal L-kernel bandwidth b_hat_UCV = {b_hat_UCV}")
     
-    Here we plot the scores to visually check that we are in
-    the range of the smallest minima. If the minimum occurs
-    in the tail of the plot, expand the `b_grid` bounds above
-    >>> pyplot.plot(b_grid, scores, '.')
-    >>> pyplot.show()
-
     The value b_hat_UCV is the optimal LSCV bandwidth for
     the L-kernel. We need to convert this to the optimal
     bandwidth h_hat_UCV for the Gaussian kernel.
     >>> C = ICV.bUCV_to_hUCV_factor()
     >>> h_hat_UCV = C * b_hat_UCV
     >>> print(f"Optimal Gaussian bandwidth h_hat_UCV = {h_hat_UCV}")
+
+    Here we plot the scores to visually check that we are in
+    the range of the smallest minimum. If the minimum occurs
+    in the tail of the plot, expand the `b_grid` bounds above
+    >>> pyplot.plot(b_grid, scores, '-')
+    >>> pyplot.suptitle("LSCV score vs L-kernel bandwidth")
+    >>> pyplot.title(
+    ...  f"Parameters: n={ICV.data.shape[0]}, α={ICV.params[0]:.3f}, σ={ICV.params[1]:.3f}")
+    >>> pyplot.xlabel("Bandwidth (b)")
+    >>> pyplot.ylabel("LSCV score")
+    >>> pyplot.plot(np.tile(b_hat_UCV, 10), np.linspace(min(scores), 
+    ...     max(scores)-0.3, 10), 'k--', linewidth = 1)
+    >>> pyplot.annotate(f"b̂UCV = {b_hat_UCV:0.3f}\nĥUCV = {C:0.3f}⋅b̂UCV = {h_hat_UCV:0.3f}",
+    ...     (b_hat_UCV, max(scores)-0.3))
+    >>> pyplot.grid(linestyle = '-.', linewidth = 0.5)
+    >>> pyplot.show()
+
+    We can also plot the L-kernel for the current values
+    of (alpha, sigma). Since the 2-D kernel is symmetric
+    about the origin, we just plot a slice through the
+    y = 0 plane.
+    >>> support = np.linspace(-10,10,200)
+    >>> support2d = np.concatenate(
+    ...     (support.reshape(-1,1), np.zeros(200).reshape(-1,1)),
+    ...     axis = 1)
+    >>> kernel = ICV._L_Kernel(support2d)
+    >>> pyplot.plot(support, kernel, '-')
+    >>> pyplot.title(
+    ...  f"L(u, α={ICV.params[0]:.3f}, σ={ICV.params[1]:.3f})")
+    >>> pyplot.xlabel('u')
+    >>> pyplot.ylabel('L(u,α,σ)')
+    >>> pyplot.grid(linestyle = '-.', linewidth = 0.5)
+    >>> pyplot.tight_layout()
+    >>> pyplot.show()
     """
 
     def __init__(self, data, params = 'auto'):
@@ -350,13 +398,14 @@ class IndirectKFoldCrossValidation(BivariateICV):
 
     def __call__(self, b):
         
+        K = len(self.split_data)
         n = self.data.shape[0]
 
         #Initiallize the LSCV score with the first term in
         #equation (2) in [Savchuk2010]
         KFold_CV_score = (1.0/(n*b)) * self._RL
 
-        for missing_idx in np.arange(len(self.split_data)):
+        for missing_idx in np.arange(K):
             KFoldarray = np.concatenate(
                     (*self.split_data[:missing_idx], 
                         *self.split_data[missing_idx+1:]),
