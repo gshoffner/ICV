@@ -27,7 +27,7 @@ from scipy.stats import multivariate_normal
 #Shorthand for the normal PDF since this gets called frequently
 N = lambda *args, **kwargs : multivariate_normal.pdf(*args, **kwargs)
 
-ICV_PARAM_SELECTION_METHODS = ['auto' , 'Savchuk2008']
+ICV_PARAM_SELECTION_METHODS = {'auto' , 'Savchuk2008'}
 
 
 class BivariateICV:
@@ -131,20 +131,20 @@ class BivariateICV:
         L -= (α/σ) * N(points/σ, mean = np.zeros(2))
         return L
     
-    def _LSCV(self, b, kde_pts, trial_pts):
+    def _LSCV_step(self, b, kde_pts, trial_pts):
         """Evaluates a single ICV step on the L-kernel bandwidth `b`.
 
         This function implements the sumations shown in 
         equation (2) in [Savchuk2010] for the L-kernel. Note
         that the first term in the equation (1/nh)R(L) is 
-        left out so that iterative calls to _LSCV over
-        successive values of `j` (the index left out data
-        point) do not repeatedly add this first term. This 
-        means _LSCV should be invoked as:
+        left out so that iterative calls to _LSCV_step over
+        successive values of `j` (the index of the left out 
+        data point) do not repeatedly add this first term. 
+        This means _LSCV_step should be invoked as:
 
         SUM = (1/nh)R(L)
         for OUT_PT in PTS:
-            SUM += _LSCV(b, IN_PTS, OUT_PT)
+            SUM += _LSCV_step(b, IN_PTS, OUT_PT)
 
         The awkward outer-product call to substract below is
         for compatibility with multiple left-out data, ie in
@@ -313,7 +313,7 @@ class IndirectCrossValidation(BivariateICV):
             
             trial_pt = self.data[missing_idx].reshape(1,2)
             
-            LOO_CV_score += self._LSCV(b, LOOarray, trial_pt)
+            LOO_CV_score += self._LSCV_step(b, LOOarray, trial_pt)
 
         return LOO_CV_score
 
@@ -432,6 +432,6 @@ class IndirectKFoldCrossValidation(BivariateICV):
     
             trial_pts = self.split_data[missing_idx]
 
-            KFold_CV_score += self._LSCV(b, KFoldarray, trial_pts)
+            KFold_CV_score += self._LSCV_step(b, KFoldarray, trial_pts)
 
         return KFold_CV_score
