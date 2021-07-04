@@ -21,16 +21,20 @@
 
 import sys
 import numpy as np
-from scipy.stats import multivariate_normal as MVN
+from scipy.stats import multivariate_normal
 
+
+#Shorthand for the normal PDF since this gets called frequently
+N = lambda *args, **kwargs : multivariate_normal.pdf(*args, **kwargs)
 
 ICV_PARAM_SELECTION_METHODS = ['auto' , 'Savchuk2008']
+
 
 class BivariateICV:
     """Base class for bivariate indirect cross validation.
 
     Don't use directly, use IndirectCrossValidation or 
-    IndirectKFoldCrossValidation instead
+    IndirectKFoldCrossValidation instead.
     """
     
     def __init__(self, data, params = 'auto'):
@@ -42,23 +46,38 @@ class BivariateICV:
             assert data.shape[1] == 2
         except AssertionError:
             sys.exit(
-                "Error: data must have shape = (n_samples, 2)."
+                "Error: data must be an ndarray with shape (n_samples, 2)."
                 )
 
+        self.data = data
+        
         #Verify params
-        param_error_msg = "Error: user supplied parameters must be a 2-tuple (alpha, sigma)."
+        self.set_params(params)
+
+
+        #Cache the RL value
+        self._RL = self.RL(self.params)
+
+    def set_params(self, params):
+        """Verifies selection method and stores (alpha,sigma)
+
+        Can be used to reset (alpha, sigma) to custom values
+        after instantiation of an ICV class.
+        """
+
+        param_error_msg = "Error: supplied params must be a 2-tuple (alpha, sigma)."
         if type(params) == str:
 
             if params not in ICV_PARAM_SELECTION_METHODS:
-                sys.exit("Error: unrecognized parameter selection sting %s specified." \
+                sys.exit("Error: unrecognized param selection sting %s given." \
                         % params)
 
             elif params == 'auto':
                 self.params = \
-                    (2.42, max(5.06, 0.149 * data.shape[0]**(3./8.)))
+                    (2.42, max(5.06, 0.149 * self.data.shape[0]**(3./8.)))
 
             elif params == 'Savchuk2008':
-                    self.params = self._Savchuk2008(data.shape[0])
+                    self.params = self._Savchuk2008(self.data.shape[0])
 
         elif type(params) == tuple:
             if len(params) != 2:
@@ -74,33 +93,28 @@ class BivariateICV:
 
         else:
             sys.exit("Error: `params` value not recognized. Either specify a method string or a 2-tuple (alpha, sigma)")
-
-        self.data = data
-
-        #Cache the RL value
-        self._RL = self.RL(self.params)
         
     @staticmethod
     def _Savchuk2008(N_samples):
         """Calculates the alpha,sigma params based on the
         formulas giving in [Savchuk2008]."""
         
-        lN = np.log10(N_samples)
+        lNsamp = np.log10(N_samples)
 
         alpha_mod = 10.0**(
-                3.39-1.093*lN + 0.025*lN**3 - 0.00004*lN**6.0
+                3.39-1.093*lNsamp + 0.025*lNsamp**3 - 0.00004*lNsamp**6.0
             )
 
         sigma_mod = 10.0**(
-                -0.58 + 0.386*lN - 0.012*lN**2.0
+                -0.58 + 0.386*lNsamp - 0.012*lNsamp**2.0
             )
 
         return alpha_mod, sigma_mod
 
     @staticmethod
     def RL(params):
-        """Operator `R` from [Savchuk2010] applied to the L
-        kernel and evaluated at `params`."""
+        """Operator `R(g)` from [Savchuk2010] applied to the L
+        kernel and evaluated at params = (alpha,sigma)."""
         
         α, σ = params
 
@@ -113,20 +127,20 @@ class BivariateICV:
     def _L_Kernel(self, points):
         """Evaluates the 2-dimensional L-kernel."""
         α, σ = self.params
-        L = (1.0 + α) * MVN.pdf(points, mean = np.zeros(2))
-        L -= (α/σ)*MVN.pdf(points/σ, mean = np.zeros(2))
+        L = (1.0 + α) * N(points, mean = np.zeros(2))
+        L -= (α/σ) * N(points/σ, mean = np.zeros(2))
         return L
     
     def _LSCV(self, b, kde_pts, trial_pts):
-        """Evaluates ICV score on the L-kernel bandwidth `b`.
+        """Evaluates a single ICV step on the L-kernel bandwidth `b`.
 
         This function implements the sumations shown in 
         equation (2) in [Savchuk2010] for the L-kernel. Note
         that the first term in the equation (1/nh)R(L) is 
         left out so that iterative calls to _LSCV over
-        successive values of `j` (the left out data point)
-        do not repeated add this first term. This means 
-        _LSCV should be invoked as
+        successive values of `j` (the index left out data
+        point) do not repeatedly add this first term. This 
+        means _LSCV should be invoked as:
 
         SUM = (1/nh)R(L)
         for OUT_PT in PTS:
@@ -139,6 +153,9 @@ class BivariateICV:
 
         n = float(self.data.shape[0])
 
+        #Not sure if using Unicode symbols in code is exactly
+        #kosher, but it greatly simplifies and clarifies the
+        #equations below.
         α, σ = self.params
         
         #Take the difference between the kernel means `kde_pts`
@@ -157,9 +174,9 @@ class BivariateICV:
 
         #Second term in Equation (2)
         SUM = (1.0/(b * n**2.0)) * np.sum(
-            ((1.0+α)**2.0)*MVN.pdf(diff, mean=mu, cov = 2.0*I) \
-            - 2.0*σ*α*(1.0+α)*MVN.pdf(diff, mean=mu, cov = (1.0+σ**2.0)*I) \
-            + (σ**2.0)*(α**2.0)*MVN.pdf(diff, mean=mu, cov = 2.0*(σ**2.0)*I)
+            ((1.0+α)**2.0) * N(diff, mean=mu, cov = 2.0*I) \
+            - 2.0*σ*α*(1.0+α) * N(diff, mean=mu, cov = (1.0+σ**2.0)*I) \
+            + (σ**2.0)*(α**2.0) * N(diff, mean=mu, cov = 2.0*(σ**2.0)*I)
         )
 
         #Third term in Equation (2)
@@ -173,8 +190,10 @@ class BivariateICV:
         Gaussian kernel bandwidth hUCV."""
 
         α, σ = self.params
-        
-        return (((4.0*(1.0 + α) - 2.0*α*(σ**3.0))**2.0)/(64.0*np.pi*self._RL))**0.2
+
+        C = (((4.0*(1.0 + α) - 2.0*α*(σ**3.0))**2.0)/(64.0*np.pi*self._RL))**0.2
+
+        return C
 
     def evaluate(self, b):
         """Evaluates Full ICV score on the L-kernel bandwidth `b`."""
@@ -375,9 +394,7 @@ class IndirectKFoldCrossValidation(BivariateICV):
     >>> loo_scores = pool.map(ICV, b_grid)
     >>> kfold_scores = pool.map(KICV, b_grid)
     
-    Here we plot the scores to visually check that we are in
-    the range of the smallest minima. If the minimum occurs
-    in the tail of the plot, expand the `b_grid` bounds above
+    Plot the scores vs the L-kernel bandwidth
     >>> pyplot.plot(b_grid, loo_scores, '-')
     >>> pyplot.plot(b_grid, kfold_scores, '-')
     >>> pyplot.show()
